@@ -524,11 +524,26 @@ impl<R: Runtime> Stt<R> {
                     );
                 }
             }
-            // Atomic-ish rename so a crash mid-download never leaves a
+           // Atomic-ish rename so a crash mid-download never leaves a
             // partial `.bin` that whisper.cpp would gladly try to load.
-            fs::rename(&tmp, &dest_clone).map_err(|e| {
-                format!("rename {} -> {}: {e}", tmp.display(), dest_clone.display())
-            })?;
+            // Falls back to copy+delete when the rename is cross-device
+            // (os error 17 / EXDEV) — e.g. AppData redirected via OneDrive
+            // Known Folder Backup or a junction to another volume.
+            if let Err(e) = fs::rename(&tmp, &dest_clone) {
+                let is_cross_device = e.raw_os_error() == Some(17);
+                if !is_cross_device {
+                    return Err(format!(
+                        "rename {} -> {}: {e}",
+                        tmp.display(),
+                        dest_clone.display()
+                    ));
+                }
+                fs::copy(&tmp, &dest_clone).map_err(|e| {
+                    format!("copy {} -> {}: {e}", tmp.display(), dest_clone.display())
+                })?;
+                fs::remove_file(&tmp)
+                    .map_err(|e| format!("remove {}: {e}", tmp.display()))?;
+            }
             Ok(())
         })();
 
