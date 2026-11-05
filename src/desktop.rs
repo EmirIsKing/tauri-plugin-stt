@@ -475,15 +475,44 @@ impl<R: Runtime> Stt<R> {
         // here would add nothing but a join.
         let download = (move || -> Result<(), String> {
             let client = reqwest::blocking::Client::builder()
+                .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 AutoCorrect/1.0")
                 .timeout(Duration::from_secs(60 * 60))
                 .build()
                 .map_err(|e| format!("http client: {e}"))?;
-            let mut response = client
-                .get(&url)
-                .send()
-                .map_err(|e| format!("get {url}: {e}"))?
-                .error_for_status()
-                .map_err(|e| format!("http status: {e}"))?;
+
+            let mut urls_to_try = vec![url.clone()];
+            if !url.contains("download=true") {
+                urls_to_try.push(format!("{url}?download=true"));
+            }
+            if url.contains("huggingface.co") {
+                urls_to_try.push(url.replace("huggingface.co", "hf-mirror.com"));
+            }
+
+            let mut last_err = String::new();
+            let mut maybe_response = None;
+
+            for try_url in &urls_to_try {
+                match client
+                    .get(try_url)
+                    .header(reqwest::header::ACCEPT, "*/*")
+                    .send()
+                {
+                    Ok(res) => match res.error_for_status() {
+                        Ok(ok_res) => {
+                            maybe_response = Some(ok_res);
+                            break;
+                        }
+                        Err(e) => {
+                            last_err = format!("http status: {e}");
+                        }
+                    },
+                    Err(e) => {
+                        last_err = format!("get {try_url}: {e}");
+                    }
+                }
+            }
+
+            let mut response = maybe_response.ok_or(last_err)?;
 
             let total = response.content_length();
             let tmp = dest_clone.with_extension("part");
